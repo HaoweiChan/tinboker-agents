@@ -1,0 +1,94 @@
+name: Scheduled Graph Update
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run mode: tier (by tier level) or tickers (specific tickers)'
+        required: true
+        type: choice
+        options:
+          - tier
+          - tickers
+        default: tier
+      tier:
+        description: 'Tier level (1, 2, or 3) - only used if mode=tier'
+        required: false
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '3'
+        default: '1'
+      tickers:
+        description: 'Comma-separated tickers - only used if mode=tickers'
+        required: false
+        default: 'TSLA,AAPL,MSFT'
+      limit:
+        description: 'Limit number of tickers to process (0 = no limit)'
+        required: false
+        default: '0'
+
+  # Scheduled trigger (disabled - uncomment when ready)
+  # schedule:
+  #   - cron: '0 6 * * *'  # Daily at 6 AM UTC
+
+jobs:
+  update-graph:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -e .
+
+      - name: Run pipeline by tier
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'tier'
+        run: |
+          TIER="${{ github.event.inputs.tier }}"
+          LIMIT="${{ github.event.inputs.limit }}"
+          
+          if [ "$LIMIT" != "0" ] && [ -n "$LIMIT" ]; then
+            python -m apps.cli.main ingest-batch --tier "$TIER" --limit "$LIMIT"
+          else
+            python -m apps.cli.main ingest-batch --tier "$TIER"
+          fi
+        env:
+          NEO4J_URI: ${{ secrets.NEO4J_URI }}
+          NEO4J_USER: ${{ secrets.NEO4J_USER }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+
+      - name: Run pipeline by tickers
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'tickers'
+        run: |
+          TICKERS="${{ github.event.inputs.tickers }}"
+          python -m apps.cli.main ingest-batch --tickers "$TICKERS"
+        env:
+          NEO4J_URI: ${{ secrets.NEO4J_URI }}
+          NEO4J_USER: ${{ secrets.NEO4J_USER }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+
+      - name: Run Tier 1 (scheduled)
+        if: github.event_name == 'schedule'
+        run: python -m apps.cli.main ingest-batch --tier 1
+        env:
+          NEO4J_URI: ${{ secrets.NEO4J_URI }}
+          NEO4J_USER: ${{ secrets.NEO4J_USER }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+
+      - name: Summary
+        run: echo "Graph update completed at $(date)"

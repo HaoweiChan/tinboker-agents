@@ -1,0 +1,9 @@
+{
+    "mcpServers": {
+      "blog-post-manager": {
+        "command": "python",
+        "args": ["-m", "mcp.servers.blog_mcp_server"],
+        "cwd": "/path/to/Graph-Builder-Agent"
+      }
+    }
+  }

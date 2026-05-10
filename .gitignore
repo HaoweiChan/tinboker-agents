@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+build/
+dist/
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# Test/coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Local OMC state
+.omc/state/
+
+# Graphify outputs (top-level)
+graphify-out/
+
+# Wiki graph store (generated at runtime)
+wiki-graph/
+
+# Stray infographic outputs at any depth
+infographic_*.png
+infographic_*.svg
+infographic_*.txt
+
+# Service-account keys (do not commit)
+gcp-service-account.json
+*.gcp.json
+
+# Logs
+*.log
+
+# uv
+uv.lock
+
+# Content legacy (absorbed into services/podcast)
+content/src/
+content/services/

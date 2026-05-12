@@ -1,14 +1,15 @@
-"""Wiki-backed graph store.
+"""JSON-backed graph store.
 
 Replaces Neo4j with a local JSON file (``wiki-graph/kg_store.json``) for
-entity/edge/evidence storage, and writes entity pages into the shared
-``wiki/`` directory for human browsing and agent crawling.
+entity/edge/evidence storage.
 
-All data lives on disk — zero infrastructure cost.
+TODO: the content-wiki now lives in Postgres on the VPS (see
+``libs/shared/.../wiki_builder`` + the podcast service's ``/api/wiki`` routes).
+This store should push its entities/supply-chain into that wiki via HTTP, and
+``kg_store.json`` should move to a Postgres table — deferred follow-up.
 """
 
 import json
-import hashlib
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -21,12 +22,13 @@ logger = logging.getLogger(__name__)
 
 
 class WikiStore(GraphStore):
-    """Flat-file graph store backed by JSON + wiki markdown."""
+    """Flat-file graph store backed by a JSON document."""
 
     def __init__(self, store_path: str | None = None, wiki_root: str | None = None):
+        # ``wiki_root`` is accepted for backward compatibility but no longer used:
+        # markdown wiki pages are no longer written from here (see module TODO).
         base = Path(__file__).resolve().parents[3]
         self._store_path = Path(store_path) if store_path else base / "wiki-graph" / "kg_store.json"
-        self._wiki_root = Path(wiki_root) if wiki_root else base / "wiki"
         self._store_path.parent.mkdir(parents=True, exist_ok=True)
         self._data = self._load()
 
@@ -79,54 +81,9 @@ class WikiStore(GraphStore):
                 "updated_at": datetime.utcnow().isoformat(),
             }
         self._save()
-        self._write_entity_pages(entities, edges)
-
-    def _write_entity_pages(self, entities: list[Entity], edges: list[Edge]) -> None:
-        """Write/update wiki entity pages from upserted graph data."""
-        entities_dir = self._wiki_root / "entities"
-        sc_dir = self._wiki_root / "supply-chain"
-        entities_dir.mkdir(parents=True, exist_ok=True)
-        sc_dir.mkdir(parents=True, exist_ok=True)
-
-        entity_map = {e.id: e for e in entities}
-        for entity in entities:
-            slug = entity.id.lower().replace(" ", "-")
-            name = entity.props.get("name", entity.id)
-            path = entities_dir / f"{slug}.md"
-            if not path.exists():
-                lines = [
-                    "---",
-                    "type: entity",
-                    f"id: {slug}",
-                    f'name: "{name}"',
-                    f"entity_type: {entity.type}",
-                    f"tickers: [{entity.props.get('ticker', '')}]",
-                    "---",
-                    "",
-                    f"# {name}",
-                    "",
-                ]
-                path.write_text("\n".join(lines), encoding="utf-8")
-
-        for edge in edges:
-            src_name = entity_map.get(edge.src, Entity(id=edge.src, type="unknown")).props.get("name", edge.src)
-            dst_name = entity_map.get(edge.dst, Entity(id=edge.dst, type="unknown")).props.get("name", edge.dst)
-            src_slug = edge.src.lower().replace(" ", "-")
-            dst_slug = edge.dst.lower().replace(" ", "-")
-
-            sc_path = sc_dir / f"{src_slug}.md"
-            existing = sc_path.read_text(encoding="utf-8") if sc_path.exists() else ""
-            link = f"[[entities/{dst_slug}]]"
-            if link not in existing:
-                if not existing:
-                    existing = (
-                        f"---\ntype: supply_chain\nentity: {src_slug}\n---\n\n"
-                        f"# {src_name} — Supply Chain\n\n"
-                        f"## Relationships\n\n"
-                    )
-                status = edge.props.get("status", "active")
-                existing += f"- {link} — {edge.rel} ({status})\n"
-                sc_path.write_text(existing, encoding="utf-8")
+        # NOTE: markdown wiki pages used to be written here; the content-wiki now
+        # lives in Postgres (see module TODO). Entities/supply-chain will be pushed
+        # to the wiki API in a follow-up.
 
     def upsert_infographic(
         self,

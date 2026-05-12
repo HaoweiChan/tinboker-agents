@@ -1,12 +1,12 @@
 #!/bin/bash
-# Deploy podcast API to VPS
-# Usage: ssh root@152.53.136.182 'bash -s' < scripts/deploy_vps.sh
+# Deploy the podcast API + knowledge-wiki Postgres to the Netcup VPS.
+# Usage: ssh root@152.53.136.182 'bash -s' < services/podcast/scripts/deploy_vps.sh
 # Or run directly on the VPS after cloning the repo.
 
 set -e
 
 REPO_DIR="/root/tinboker-agents"
-PODCAST_DIR="$REPO_DIR/podcast"
+PODCAST_DIR="$REPO_DIR/services/podcast"
 SA_FILE="$PODCAST_DIR/gcp-service-account.json"
 
 echo "=== Podcast API VPS Deployment ==="
@@ -19,21 +19,18 @@ else
     echo "→ Cloning repository..."
     git clone https://github.com/HaoweiChan/tinboker-agents.git "$REPO_DIR"
 fi
+cd "$REPO_DIR"
 
-# 2. Set up Python venv
-echo "→ Setting up Python virtual environment..."
-cd "$PODCAST_DIR"
-if [ ! -d ".venv" ]; then
-    python3 -m venv .venv
+# 2. Install uv if missing, then sync the podcast package (uv workspace)
+if ! command -v uv >/dev/null 2>&1; then
+    echo "→ Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 fi
-source .venv/bin/activate
+echo "→ Syncing dependencies (uv sync --package tinboker-podcast)..."
+uv sync --package tinboker-podcast
 
-# 3. Install dependencies
-echo "→ Installing dependencies..."
-pip install --upgrade pip -q
-pip install -r requirements.txt -q
-
-# 4. Set up GCP credentials
+# 3. GCP credentials for ADC (Secret Manager, Firestore, GCS)
 if [ ! -f "$SA_FILE" ]; then
     if [ -f "/root/gcp-sa-backup.json" ]; then
         cp /root/gcp-sa-backup.json "$SA_FILE"
@@ -46,21 +43,45 @@ if [ ! -f "$SA_FILE" ]; then
     fi
 fi
 
-# 5. Install systemd service
+# 4. Postgres for the knowledge wiki (bare-metal, localhost only)
+if ! command -v pg_isready >/dev/null 2>&1 && ! dpkg -s postgresql >/dev/null 2>&1; then
+    echo "→ Installing Postgres..."
+    apt-get update -qq && apt-get install -y -qq postgresql
+fi
+systemctl enable --now postgresql || true
+if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='tinboker_wiki'" | grep -q 1; then
+    echo "→ Creating tinboker_wiki database..."
+    echo "  NOTE: set a real password and the WIKI_DATABASE_URL secret — see docs/MIGRATION.md Part 7."
+    sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'tinboker') THEN
+    CREATE ROLE tinboker WITH LOGIN PASSWORD 'CHANGE_ME';
+  END IF;
+END $$;
+CREATE DATABASE tinboker_wiki OWNER tinboker;
+SQL
+fi
+
+# 5. Apply the wiki schema (idempotent). Requires WIKI_DATABASE_URL — either exported here,
+#    or pulled from Secret Manager by the script's bootstrap fallback (see wiki_migrate.sh).
+echo "→ Applying wiki schema (wiki_migrate.sh)..."
+bash "$PODCAST_DIR/scripts/wiki_migrate.sh" || echo "  ⚠ wiki migrate skipped — set the WIKI_DATABASE_URL secret (docs/MIGRATION.md Part 7)"
+
+# 6. Install / refresh the systemd service
 echo "→ Installing systemd service..."
 cat > /etc/systemd/system/podcast-api.service << 'EOF'
 [Unit]
-Description=Tinboker Podcast API (LangGraph Pipeline)
-After=network.target
+Description=Tinboker Podcast API (LangGraph Pipeline + Wiki API)
+After=network.target postgresql.service
 
 [Service]
 Type=simple
-WorkingDirectory=/root/tinboker-agents/podcast
-ExecStart=/root/tinboker-agents/podcast/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8003
+WorkingDirectory=/root/tinboker-agents/services/podcast
+ExecStart=/root/tinboker-agents/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8003
 Restart=always
 RestartSec=5
 Environment=PORT=8003
-Environment=GOOGLE_APPLICATION_CREDENTIALS=/root/tinboker-agents/podcast/gcp-service-account.json
+Environment=GOOGLE_APPLICATION_CREDENTIALS=/root/tinboker-agents/services/podcast/gcp-service-account.json
 
 [Install]
 WantedBy=multi-user.target
@@ -73,7 +94,7 @@ systemctl restart podcast-api
 echo "→ Waiting for service to start..."
 sleep 3
 
-# 6. Health check
+# 7. Health checks
 if curl -sf http://localhost:8003/health > /dev/null 2>&1; then
     echo "✓ Podcast API is healthy on port 8003"
 else
@@ -81,9 +102,12 @@ else
     systemctl status podcast-api --no-pager
     exit 1
 fi
-
+curl -s http://localhost:8003/api/wiki/health || true
 echo ""
+
 echo "=== Deployment complete ==="
-echo "  Service: systemctl status podcast-api"
-echo "  Logs:    journalctl -u podcast-api -f"
-echo "  Health:  curl http://localhost:8003/health"
+echo "  Service:  systemctl status podcast-api"
+echo "  Logs:     journalctl -u podcast-api -f"
+echo "  Health:   curl http://localhost:8003/health"
+echo "  Wiki:     curl http://localhost:8003/api/wiki/health"
+echo "  Wiki DB:  see docs/MIGRATION.md Part 7 (create WIKI_DATABASE_URL secret + backfill)"

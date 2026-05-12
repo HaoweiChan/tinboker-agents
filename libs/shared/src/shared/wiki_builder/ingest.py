@@ -1,140 +1,97 @@
-"""Ingest episode and supply-chain data into the wiki.
+"""Ingest episode and supply-chain content into a :class:`WikiRepository`.
 
-Main entry points:
-  - ``ingest_episode`` — writes podcast episode data
-  - ``ingest_supply_chain`` — writes entity/edge data from knowledge-graph
+Entry points:
+  - :func:`ingest_episode` — podcast episode data (used by ``services/podcast``)
+  - :func:`ingest_supply_chain` — entity/edge data (knowledge-graph follow-up)
+
+These build :class:`WikiPage` records and persist them via the repository; they
+do not touch the filesystem.
 """
 
-import re
+from __future__ import annotations
+
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-import yaml
-
-from .pages import render_entity_page, render_episode_page, render_topic_page
-from .slugify import episode_slug, slugify, ticker_slug
-
-_DEFAULT_WIKI_ROOT = Path(__file__).resolve().parents[5] / "wiki"
-
-
-def _parse_frontmatter(text: str) -> dict:
-    m = re.match(r"^---\n(.*?)\n---", text, re.DOTALL)
-    if not m:
-        return {}
-    try:
-        return yaml.safe_load(m.group(1)) or {}
-    except yaml.YAMLError:
-        return {}
+from .factory import get_repository
+from .models import WikiPage
+from .records import (
+    render_entity_page,
+    render_episode_page,
+    render_supply_chain_page,
+    render_topic_page,
+)
+from .repository import WikiRepository
+from .slugify import slugify, ticker_slug
 
 
-def _read_page(path: Path) -> str | None:
-    if path.exists():
-        return path.read_text(encoding="utf-8")
-    return None
+def _append_line_to_section(body: str, marker: str, line: str) -> str:
+    """Insert ``line`` once as the first item under ``marker``.
 
-
-def _ensure_dir(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-
-def _append_mention_to_entity(entity_path: Path, episode_link: str, context: str) -> None:
-    content = _read_page(entity_path)
-    if content is None:
-        return
-    if episode_link in content:
-        return
-    marker = "## Episode Mentions"
-    if marker in content:
-        idx = content.index(marker) + len(marker)
-        insert_line = f"\n- [[{episode_link}]] — {context}"
-        content = content[:idx] + insert_line + content[idx:]
-    else:
-        content += f"\n## Episode Mentions\n\n- [[{episode_link}]] — {context}\n"
-    entity_path.write_text(content, encoding="utf-8")
+    Creates the section (with a blank line after the heading) if it is missing.
+    """
+    if line in body:
+        return body
+    idx = body.find(marker)
+    if idx == -1:
+        return body.rstrip() + f"\n\n{marker}\n\n{line}\n"
+    nl = body.find("\n", idx)
+    insert_at = len(body) if nl == -1 else nl + 1
+    if body[insert_at : insert_at + 1] == "\n":  # keep one blank line after the heading
+        insert_at += 1
+    return body[:insert_at] + line + "\n" + body[insert_at:]
 
 
 def _append_ticker_history(
-    entity_path: Path, date: str, sentiment: str, score: Any, thesis: str
+    page: WikiPage, *, date: str, sentiment: str, score: Any, thesis: str
 ) -> None:
-    content = _read_page(entity_path)
-    if content is None:
-        return
-    row = f"| {date} | {sentiment} | {score} | {thesis.replace('|', '—')} |"
-    if row in content:
+    row = f"| {date} | {sentiment} | {score} | {str(thesis).replace('|', '—')} |"
+    body = page.body
+    if row in body:
         return
     marker = "## Ticker History"
-    if marker in content:
-        idx = content.index(marker)
-        rest = content[idx:]
-        lines = rest.split("\n")
-        insert_pos = idx
-        for i, line in enumerate(lines):
-            insert_pos = idx + sum(len(l) + 1 for l in lines[: i + 1])
-            if line.startswith("|---"):
-                insert_pos = idx + sum(len(l) + 1 for l in lines[: i + 1])
-                break
-        for i in range(len(lines) - 1, 0, -1):
-            if lines[i].startswith("|"):
-                insert_pos = idx + sum(len(l) + 1 for l in lines[: i + 1])
-                break
-        content = content[:insert_pos] + row + "\n" + content[insert_pos:]
-    else:
-        content += (
-            f"\n## Ticker History\n\n"
-            f"| Date | Sentiment | Score | Thesis |\n"
-            f"|------|-----------|-------|--------|\n"
+    if marker not in body:
+        page.body = body.rstrip() + (
+            "\n\n## Ticker History\n\n"
+            "| Date | Sentiment | Score | Thesis |\n"
+            "|------|-----------|-------|--------|\n"
             f"{row}\n"
         )
-    entity_path.write_text(content, encoding="utf-8")
-
-
-def _append_episode_to_topic(topic_path: Path, episode_link: str, context: str) -> None:
-    content = _read_page(topic_path)
-    if content is None:
         return
-    if episode_link in content:
-        return
-    marker = "## Episodes"
-    if marker in content:
-        idx = content.index(marker) + len(marker)
-        insert_line = f"\n- [[{episode_link}]] — {context}"
-        content = content[:idx] + insert_line + content[idx:]
-    else:
-        content += f"\n## Episodes\n\n- [[{episode_link}]] — {context}\n"
-    topic_path.write_text(content, encoding="utf-8")
+    lines = body.split("\n")
+    start = next(i for i, ln in enumerate(lines) if ln.strip() == marker)
+    last_table_row = start
+    for i in range(start + 1, len(lines)):
+        if lines[i].lstrip().startswith("|"):
+            last_table_row = i
+        elif lines[i].strip().startswith("#"):
+            break
+    lines.insert(last_table_row + 1, row)
+    page.body = "\n".join(lines)
 
 
 def ingest_episode(
     podcast_name: str,
-    episode_number: Optional[int],
+    episode_number: int | None,
     title: str,
-    date: Optional[str],
-    tickers: List[str],
-    tags: List[str],
+    date: str | None,
+    tickers: list[str],
+    tags: list[str],
     summary_text: str,
-    events_markdown: Optional[str] = None,
-    ticker_recommendations: Optional[Dict[str, Any]] = None,
-    source_urls: Optional[Dict[str, str]] = None,
-    wiki_root: Optional[Path] = None,
-) -> Path:
-    """Write episode data into the wiki.
+    events_markdown: str | None = None,
+    ticker_recommendations: dict[str, Any] | None = None,
+    source_urls: dict[str, str] | None = None,
+    repository: WikiRepository | None = None,
+) -> WikiPage:
+    """Persist episode data: the episode page plus referenced entity/topic pages.
 
-    Creates/overwrites the episode page and creates/updates entity and topic
-    pages referenced by the episode.
-
-    Returns the path to the written episode page.
+    Returns the (persisted) episode :class:`WikiPage`.
     """
-    root = wiki_root or _DEFAULT_WIKI_ROOT
+    repo = repository or get_repository()
     if date is None:
         date = datetime.now().strftime("%Y-%m-%d")
 
-    ep_slug = episode_slug(podcast_name, episode_number, title)
-    ep_link = f"episodes/{ep_slug}"
-
-    ep_path = root / "episodes" / f"{ep_slug}.md"
-    _ensure_dir(ep_path)
-    ep_content = render_episode_page(
+    episode_page = render_episode_page(
         podcast_name=podcast_name,
         episode_number=episode_number,
         title=title,
@@ -146,70 +103,69 @@ def ingest_episode(
         ticker_recommendations=ticker_recommendations,
         source_urls=source_urls,
     )
-    ep_path.write_text(ep_content, encoding="utf-8")
+    ep_link = f"episodes/{episode_page.slug}"
+    episode_page = repo.upsert_page(episode_page)
 
     recs = (ticker_recommendations or {}).get("ticker_recommendations", [])
-    recs_by_ticker = {r["ticker"].upper(): r for r in recs if "ticker" in r}
+    recs_by_ticker = {str(r["ticker"]).upper(): r for r in recs if "ticker" in r}
 
-    for t in tickers:
-        t_slug = ticker_slug(t)
-        entity_path = root / "entities" / f"{t_slug}.md"
-        _ensure_dir(entity_path)
-
-        if not entity_path.exists():
-            entity_content = render_entity_page(
+    for ticker in tickers:
+        t_slug = ticker_slug(ticker)
+        page = repo.get_page("entity", t_slug)
+        if page is None:
+            page = render_entity_page(
                 entity_id=t_slug,
-                name=t.upper(),
+                name=str(ticker).upper(),
                 entity_type="company",
-                tickers=[t.upper()],
+                tickers=[str(ticker).upper()],
                 mentions=[{"episode_link": ep_link, "context": title}],
                 ticker_history=[],
             )
-            entity_path.write_text(entity_content, encoding="utf-8")
         else:
-            _append_mention_to_entity(entity_path, ep_link, title)
-
-        rec = recs_by_ticker.get(t.upper())
+            page.body = _append_line_to_section(
+                page.body, "## Episode Mentions", f"- [[{ep_link}]] — {title}"
+            )
+        rec = recs_by_ticker.get(str(ticker).upper())
         if rec:
             _append_ticker_history(
-                entity_path,
+                page,
                 date=date,
                 sentiment=rec.get("sentiment", ""),
                 score=rec.get("sentiment_score", ""),
                 thesis=rec.get("bluf_thesis", ""),
             )
+        repo.upsert_page(page)
 
     for tag in tags:
-        t_slug = slugify(tag)
-        topic_path = root / "topics" / f"{t_slug}.md"
-        _ensure_dir(topic_path)
-
-        if not topic_path.exists():
-            entity_slugs = [ticker_slug(t) for t in tickers]
-            topic_content = render_topic_page(
-                topic_id=t_slug,
+        tg_slug = slugify(tag)
+        page = repo.get_page("topic", tg_slug)
+        if page is None:
+            page = render_topic_page(
+                topic_id=tg_slug,
                 name=tag,
                 episodes=[{"link": ep_link, "context": title}],
-                entities=entity_slugs,
+                entities=[ticker_slug(t) for t in tickers],
             )
-            topic_path.write_text(topic_content, encoding="utf-8")
         else:
-            _append_episode_to_topic(topic_path, ep_link, title)
+            page.body = _append_line_to_section(
+                page.body, "## Episodes", f"- [[{ep_link}]] — {title}"
+            )
+        repo.upsert_page(page)
 
-    return ep_path
+    return episode_page
 
 
 def ingest_supply_chain(
     entities: list[dict],
     edges: list[dict],
-    evidence: list[dict],
-    wiki_root: Optional[Path] = None,
+    evidence: list[dict] | None = None,
+    repository: WikiRepository | None = None,
 ) -> int:
-    """Ingest supply-chain data from the knowledge-graph pipeline.
+    """Persist supply-chain data (entity pages + per-source supply-chain pages).
 
-    Returns the number of pages written/updated.
+    Returns the number of pages created/updated.
     """
-    root = wiki_root or _DEFAULT_WIKI_ROOT
+    repo = repository or get_repository()
     count = 0
     entity_map = {e["id"]: e for e in entities}
 
@@ -219,49 +175,30 @@ def ingest_supply_chain(
         rel = edge.get("rel", "RELATED_TO")
         status = edge.get("props", {}).get("status", "active")
 
-        src_entity = entity_map.get(src_id, {})
-        dst_entity = entity_map.get(dst_id, {})
-        src_name = src_entity.get("props", {}).get("name", src_id)
-        dst_name = dst_entity.get("props", {}).get("name", dst_id)
-
+        src_name = entity_map.get(src_id, {}).get("props", {}).get("name", src_id)
+        dst_name = entity_map.get(dst_id, {}).get("props", {}).get("name", dst_id)
         src_slug = slugify(src_name)
         dst_slug = slugify(dst_name)
 
-        for eid, ename, eslug in [
-            (src_id, src_name, src_slug),
-            (dst_id, dst_name, dst_slug),
-        ]:
-            epath = root / "entities" / f"{eslug}.md"
-            _ensure_dir(epath)
-            if not epath.exists():
+        for eid, ename, eslug in ((src_id, src_name, src_slug), (dst_id, dst_name, dst_slug)):
+            if repo.get_page("entity", eslug) is None:
                 etype = entity_map.get(eid, {}).get("type", "company")
-                entity_content = render_entity_page(
-                    entity_id=eslug,
-                    name=ename,
-                    entity_type=etype,
-                    tickers=[],
-                    mentions=[],
-                    ticker_history=[],
+                repo.upsert_page(
+                    render_entity_page(
+                        entity_id=eslug, name=ename, entity_type=etype, tickers=[]
+                    )
                 )
-                epath.write_text(entity_content, encoding="utf-8")
                 count += 1
 
-        sc_path = root / "supply-chain" / f"{src_slug}.md"
-        _ensure_dir(sc_path)
-        content = _read_page(sc_path) or ""
-
-        rel_line = f"[[entities/{dst_slug}]] — {rel} ({status})"
-        if rel_line not in content:
-            if not content:
-                content = (
-                    f"---\ntype: supply_chain\nentity: {src_slug}\n---\n\n"
-                    f"# {src_name} — Supply Chain\n\n"
-                    f"## Downstream (Customers)\n\n"
-                )
-            if "## Downstream" not in content:
-                content += "\n## Downstream (Customers)\n\n"
-            content += f"- {rel_line}\n"
-            sc_path.write_text(content, encoding="utf-8")
+        sc_page = repo.get_page("supply_chain", src_slug) or render_supply_chain_page(
+            src_slug, src_name
+        )
+        rel_line = f"- [[entities/{dst_slug}]] — {rel} ({status})"
+        if rel_line not in sc_page.body:
+            sc_page.body = _append_line_to_section(
+                sc_page.body, "## Downstream (Customers)", rel_line
+            )
+            repo.upsert_page(sc_page)
             count += 1
 
     return count

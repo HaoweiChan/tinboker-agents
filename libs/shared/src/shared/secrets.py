@@ -78,6 +78,7 @@ def bootstrap(
         "SPOTIFY_SECRET",
         "LANGSMITH_API_KEY",
         "TAVILY_API_KEY",
+        "WIKI_DATABASE_URL",
     ),
     yaml_path: Optional[Path] = None,
     env_path: Optional[Path] = None,

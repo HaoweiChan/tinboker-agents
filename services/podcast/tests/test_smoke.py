@@ -6,7 +6,6 @@ They only check import-level concerns -- no external services needed.
 
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -38,15 +37,22 @@ def test_episode_data_importable():
 
 
 def test_content_builder_importable():
-    from src.podcast.content_builder import build_graph, run_pipeline, PipelineState
+    from src.podcast.content_builder import PipelineState, build_graph, run_pipeline
     assert callable(build_graph)
     assert callable(run_pipeline)
+    assert PipelineState is not None
 
 
 def test_wiki_builder_importable():
-    from src.wiki_builder import ingest_episode, rebuild_index
+    from shared.wiki_builder import get_repository, ingest_episode
     assert callable(ingest_episode)
-    assert callable(rebuild_index)
+    assert callable(get_repository)
+
+
+def test_wiki_router_importable():
+    from src.routers import wiki
+    assert wiki.router is not None
+    assert callable(wiki.get_repo)
 
 
 def test_orchestrator_run_pipeline_callable():

@@ -2,36 +2,45 @@
 
 
 def test_wiki_builder_importable():
-    from shared.wiki_builder import ingest_episode, ingest_supply_chain, rebuild_index
+    from shared.wiki_builder import (
+        InMemoryWikiRepository,
+        WikiPage,
+        get_repository,
+        ingest_episode,
+        ingest_supply_chain,
+    )
+
     assert callable(ingest_episode)
     assert callable(ingest_supply_chain)
-    assert callable(rebuild_index)
+    assert callable(get_repository)
+    assert callable(InMemoryWikiRepository)
+    assert callable(WikiPage)
 
 
 def test_slugify():
-    from shared.wiki_builder.slugify import slugify, ticker_slug, episode_slug
+    from shared.wiki_builder.slugify import episode_slug, slugify, ticker_slug
+
     assert slugify("Hello World") == "hello-world"
     assert ticker_slug("AAPL") == "aapl"
     assert episode_slug("Test Pod", 42, "Title") == "test-pod_ep42"
 
 
-def test_render_entity_page():
-    from shared.wiki_builder.pages import render_entity_page
+def test_render_entity_page_returns_record():
+    from shared.wiki_builder import WikiPage, render_entity_page
+
     page = render_entity_page(
-        entity_id="tsla",
-        name="Tesla",
-        entity_type="company",
-        tickers=["TSLA"],
-        mentions=[],
-        ticker_history=[],
+        entity_id="tsla", name="Tesla", entity_type="company", tickers=["TSLA"]
     )
-    assert "# Tesla" in page
-    assert "type: entity" in page
+    assert isinstance(page, WikiPage)
+    assert page.kind == "entity" and page.title == "Tesla"
+    assert "# Tesla" in page.body
 
 
-def test_ingest_episode_creates_files(tmp_path):
-    from shared.wiki_builder import ingest_episode
-    ep_path = ingest_episode(
+def test_ingest_episode_writes_to_repository():
+    from shared.wiki_builder import InMemoryWikiRepository, ingest_episode
+
+    repo = InMemoryWikiRepository()
+    page = ingest_episode(
         podcast_name="Test Podcast",
         episode_number=1,
         title="Test Episode",
@@ -39,43 +48,42 @@ def test_ingest_episode_creates_files(tmp_path):
         tickers=["AAPL"],
         tags=["tech"],
         summary_text="Summary here.",
-        wiki_root=tmp_path,
+        repository=repo,
     )
-    assert ep_path.exists()
-    assert (tmp_path / "entities" / "aapl.md").exists()
-    assert (tmp_path / "topics" / "tech.md").exists()
+    assert page.kind == "episode"
+    assert repo.get_page("episode", page.slug) is not None
+    assert repo.get_page("entity", "aapl") is not None
+    assert repo.get_page("topic", "tech") is not None
 
 
-def test_rebuild_index(tmp_path):
-    from shared.wiki_builder import ingest_episode, rebuild_index
+def test_build_index_markdown():
+    from shared.wiki_builder import InMemoryWikiRepository, build_index_markdown, ingest_episode
+
+    repo = InMemoryWikiRepository()
     ingest_episode(
-        podcast_name="Test",
-        episode_number=1,
-        title="Ep",
-        date="2025-01-01",
-        tickers=[],
-        tags=[],
-        summary_text="X",
-        wiki_root=tmp_path,
+        podcast_name="Test", episode_number=1, title="Ep", date="2025-01-01",
+        tickers=[], tags=[], summary_text="X", repository=repo,
     )
-    index = rebuild_index(wiki_root=tmp_path)
-    assert index.exists()
-    assert "1 episodes" in index.read_text()
+    index = build_index_markdown(repo.list_pages())
+    assert "1 episodes" in index
 
 
 def test_config_importable():
-    from shared.config import load_yaml_config, get_env
+    from shared.config import get_env, load_yaml_config
+
     assert callable(load_yaml_config)
     assert callable(get_env)
 
 
 def test_secrets_importable():
     from shared.secrets import bootstrap, reset
+
     assert callable(bootstrap)
     assert callable(reset)
 
 
 def test_gcs_importable():
     from shared.gcs import create_gcs_client, get_bucket
+
     assert callable(create_gcs_client)
     assert callable(get_bucket)

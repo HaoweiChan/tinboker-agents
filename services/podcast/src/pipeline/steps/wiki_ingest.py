@@ -1,13 +1,14 @@
-"""
-Step 5b: Ingest episode data into the knowledge wiki.
+"""Step 5b: Ingest episode data into the knowledge wiki.
 
-Runs after summarization and GCS upload. Writes/updates markdown wiki pages
-so knowledge compounds across episodes without a graph database.
+Runs after summarization and GCS upload. Persists episode/entity/topic pages via
+the shared :class:`WikiRepository` (Postgres in production). Best-effort —
+failures here do not block the pipeline. When ``WIKI_DATABASE_URL`` is unset the
+repository is a no-op.
 """
 
 from ..config import PipelineConfig
-from ..service_container import ServiceContainer
 from ..episode_data import EpisodeData
+from ..service_container import ServiceContainer
 
 
 def ingest_into_wiki(
@@ -15,10 +16,7 @@ def ingest_into_wiki(
     services: ServiceContainer,
     episode_data: EpisodeData,
 ) -> None:
-    """Write episode data into the wiki.
-
-    This is a best-effort step — failures here do not block the pipeline.
-    """
+    """Write episode data into the wiki (best-effort)."""
     should_ingest = config.rerun_from in [None, "download", "transcribe", "summarize"]
     if not should_ingest:
         return
@@ -26,10 +24,9 @@ def ingest_into_wiki(
         return
 
     try:
-        from src.wiki_builder.ingest import ingest_episode
-        from src.wiki_builder.index import rebuild_index
+        from shared.wiki_builder import ingest_episode
     except ImportError:
-        print("  ⚠ wiki_builder not available — skipping wiki ingest")
+        print("  ⚠ shared.wiki_builder not available — skipping wiki ingest")
         return
 
     episode_title = episode_data.api_data.get("title", "Untitled Episode")
@@ -37,7 +34,7 @@ def ingest_into_wiki(
 
     try:
         summary = episode_data.summary_result
-        source_urls = {}
+        source_urls: dict[str, str] = {}
         if episode_data.gcs_urls:
             for key in ["mp3_url", "transcript_url", "summary_url"]:
                 val = episode_data.gcs_urls.get(key)
@@ -53,7 +50,7 @@ def ingest_into_wiki(
         tickers = [str(t) for t in (episode_data.tickers or [])]
         tags = [str(t) for t in (episode_data.tags or [])]
 
-        ep_path = ingest_episode(
+        page = ingest_episode(
             podcast_name=episode_data.podcast_name,
             episode_number=episode_data.api_data.get("episodeNumber"),
             title=episode_title,
@@ -66,10 +63,10 @@ def ingest_into_wiki(
             source_urls=source_urls or None,
         )
 
-        rebuild_index()
-        print(f"  ✓ Wiki updated: {ep_path.name}")
+        print(f"  ✓ Wiki updated: {page.kind}/{page.slug}")
 
     except Exception as e:
         import traceback
+
         print(f"  ⚠ Wiki ingest failed (non-fatal): {e}")
         traceback.print_exc()

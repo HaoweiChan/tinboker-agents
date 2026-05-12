@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.secrets_bootstrap import bootstrap
 bootstrap()
 
-from src.routers import episode, podcast  # noqa: E402  — must follow bootstrap()
+from src.routers import episode, podcast, wiki  # noqa: E402  — must follow bootstrap()
 
 app = FastAPI(
     title="Podcast Downloader API",
@@ -28,6 +28,7 @@ app.add_middleware(
 # Include routers
 app.include_router(episode.router)
 app.include_router(podcast.router)
+app.include_router(wiki.router)
 
 
 @app.get("/")
@@ -37,8 +38,12 @@ async def root():
         "message": "Podcast Downloader API",
         "version": "1.0.0",
         "endpoints": {
+            "podcast_shows": "/api/podcast/shows (GET - all shows with thumbnails)",
+            "podcast_show": "/api/podcast/shows/{podcast_name} (GET - single show metadata)",
             "rerun_summarize_post": "/api/episodes/rerun-summarize (POST with JSON body: {\"episode_id\": \"<episode_id>\"})",
             "rerun_summarize_get": "/api/episodes/rerun-summarize/{episode_id} (GET)",
+            "wiki_pages": "/api/wiki/pages (list; GET/PUT/DELETE /api/wiki/pages/{kind}/{slug})",
+            "wiki_index": "/api/wiki/index (GET - knowledge wiki index; ?format=md for markdown)",
             "health": "/health",
             "docs": "/docs"
         }

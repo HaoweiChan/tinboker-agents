@@ -28,6 +28,9 @@ _GSM_OPTIONAL: tuple[str, ...] = (
     "SPOTIFY_ID",
     "SPOTIFY_SECRET",
     "LANGSMITH_API_KEY",
+    # Postgres connection string for the knowledge wiki (lives on the VPS).
+    # Optional: if absent, wiki ingest is a no-op (best-effort step).
+    "WIKI_DATABASE_URL",
 )
 
 _YAML_PATH = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
@@ -64,11 +67,10 @@ def _load_gsm_secrets(names: Iterable[str], *, required: bool = True) -> None:
         try:
             response = client.access_secret_version(name=path)
             os.environ[name] = response.payload.data.decode("utf-8")
-        except Exception as exc:
+        except Exception:
             if required:
                 raise
             # Optional secrets silently skipped if missing in GSM.
-            pass
 
 
 def bootstrap() -> None:

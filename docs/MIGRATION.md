@@ -1,7 +1,15 @@
 # tinboker-agents — Full Migration & Deployment Runbook
 
-This document is self-contained. You should never need to open another file to deploy
-or migrate any service in this repo.
+> **Status notes (this doc is partly historical — parts below predate later refactors):**
+> - Layout is now `services/podcast/`, `services/knowledge_graph/`, `libs/shared/` (uv workspace).
+> - `content/` was absorbed: the LangGraph pipeline is `services/podcast/src/podcast/content_builder/`,
+>   the Marp Flask service is `services/podcast/src/podcast/marp_service/`. Legacy Dify configs are
+>   archived under `docs/legacy/dify_config/`; content/feature notes under `docs/content/`.
+> - The knowledge graph no longer uses Neo4j — `services/knowledge_graph/graph/store/wiki_store.py`
+>   persists to a local JSON file `wiki-graph/kg_store.json`.
+> - **The knowledge wiki is now a Postgres database on the VPS, not markdown in this repo** — see
+>   **Part 7** below and [docs/wiki-schema.md](wiki-schema.md).
+> - `services/podcast` no longer ships a `requirements.txt`; deploy with `uv sync` (see Part 7.4).
 
 ---
 
@@ -9,9 +17,10 @@ or migrate any service in this repo.
 
 | Subdirectory | What it is | Where it runs |
 |---|---|---|
-| `knowledge-graph/` | LLM pipeline: news ingestion → Neo4j knowledge graph + SVG infographics | Google Cloud Run |
-| `podcast/` | Podcast processing pipeline: download → transcribe → summarize → Firestore | Netcup VPS (152.53.136.182) |
-| `content/` | LangGraph content generation pipeline (shared library) + Marp Flask service (Docker) | In-process (imported by podcast/) + Marp on VPS |
+| `services/knowledge_graph/` | LLM pipeline: news ingestion → JSON graph store + SVG infographics | Google Cloud Run |
+| `services/podcast/` | Podcast pipeline: download → transcribe → summarize → Firestore; also serves `/api/wiki` and hosts Postgres for the wiki | Netcup VPS (152.53.136.182) |
+| `services/podcast/src/podcast/content_builder/` | LangGraph content generation pipeline | In-process (imported by the podcast pipeline) |
+| `services/podcast/src/podcast/marp_service/` | Marp Flask service (Marp markdown → PPTX) | Docker on the VPS, port 5004 |
 
 ---
 
@@ -442,6 +451,99 @@ The pipeline reads these from the process environment (set by podcast's
 - [ ] Running `python -m apps.cli.main generate-content --ticker AAPL` locally produces output
 - [ ] Old Dify stack shut down on VPS
 - [ ] Old repos archived on GitHub
+
+---
+
+## Part 7 — Knowledge wiki → Postgres on the VPS
+
+The wiki (episode / entity / topic / supply-chain pages) used to be committed as markdown under
+`wiki/`. It is now stored in a **Postgres database on the VPS**, behind the podcast service.
+The repo is functional/infra-only: `shared.wiki_builder` (`WikiRepository`) + the `/api/wiki`
+routes are content-agnostic; content metadata is opaque JSONB. See
+[docs/wiki-schema.md](wiki-schema.md).
+
+### 7.1 Install Postgres on the VPS (bare-metal)
+
+```bash
+ssh root@152.53.136.182
+apt-get update && apt-get install -y postgresql
+systemctl enable --now postgresql
+
+sudo -u postgres psql <<'SQL'
+CREATE ROLE tinboker WITH LOGIN PASSWORD 'CHANGE_ME';
+CREATE DATABASE tinboker_wiki OWNER tinboker;
+SQL
+```
+
+Postgres listens on `127.0.0.1:5432` only (default). Connection string:
+`postgresql+psycopg://tinboker:CHANGE_ME@127.0.0.1:5432/tinboker_wiki`
+
+### 7.2 Add the `WIKI_DATABASE_URL` secret
+
+Store the connection string in Google Secret Manager so `secrets_bootstrap.py` picks it up
+(it is an *optional* secret — if absent, the wiki ingest step is a no-op, `NullWikiRepository`):
+
+```bash
+printf 'postgresql+psycopg://tinboker:CHANGE_ME@127.0.0.1:5432/tinboker_wiki' \
+  | gcloud secrets create WIKI_DATABASE_URL --data-file=- --project=gen-lang-client-0901363254
+# (or `gcloud secrets versions add WIKI_DATABASE_URL --data-file=-` if it already exists)
+```
+
+No systemd unit change needed — `bootstrap()` pulls it from GSM. (Alternatively, add
+`Environment=WIKI_DATABASE_URL=...` to the systemd unit.)
+
+### 7.3 Create the schema
+
+```bash
+cd /root/tinboker-agents
+WIKI_DATABASE_URL='postgresql+psycopg://tinboker:CHANGE_ME@127.0.0.1:5432/tinboker_wiki' \
+  bash services/podcast/scripts/wiki_migrate.sh
+```
+
+`wiki_migrate.sh` runs `PostgresWikiRepository(url).init_schema()` (`metadata.create_all`,
+idempotent — creates `wiki_pages` + `wiki_links` if missing).
+
+### 7.4 Deploy script changes
+
+`services/podcast/scripts/deploy_vps.sh` now: clones/pulls to `/root/tinboker-agents`, uses
+`uv sync --package tinboker-podcast` (instead of `pip install -r requirements.txt` — that file
+is gone), installs/starts Postgres if absent, runs `wiki_migrate.sh`, and the systemd unit
+points at `services/podcast/` and the uv-managed venv. `requirements.txt` has been removed.
+
+### 7.5 One-time backfill of the existing markdown wiki
+
+Before the PR that deletes `wiki/` lands, import the existing markdown into Postgres. Run it
+from a checkout that still has `wiki/` (e.g. your laptop), tunnelling to the VPS Postgres:
+
+```bash
+# On your laptop, with the repo's wiki/ dir present:
+ssh -fN -L 5432:127.0.0.1:5432 root@152.53.136.182        # tunnel to VPS Postgres
+uv run python services/podcast/scripts/backfill_wiki_to_postgres.py \
+  --wiki-root ./wiki \
+  --database-url 'postgresql+psycopg://tinboker:CHANGE_ME@127.0.0.1:5432/tinboker_wiki'
+# (re-run with --wiki-root ./services/wiki too if that stale copy has pages ./wiki lacks)
+```
+
+The script parses `episodes|entities|topics|supply-chain/*.md` (frontmatter + body) and
+upserts each into `wiki_pages` (which also populates `wiki_links`). It is idempotent
+(`ON CONFLICT`), prints per-kind counts, and round-trip-checks a sample. After it succeeds and
+`GET /api/wiki/index` looks right, `wiki/` and `services/wiki/` can be deleted (they are
+already gitignored, so nothing changes in git).
+
+### 7.6 Verify
+
+```bash
+curl http://localhost:8003/api/wiki/health                 # {"backend":"postgres","status":"healthy"}
+curl 'http://localhost:8003/api/wiki/index?format=json'    # lists backfilled pages by kind
+curl http://localhost:8003/api/wiki/pages/episode/<slug>.md
+```
+
+### 7.7 knowledge-graph follow-up (deferred)
+
+`services/knowledge_graph` no longer writes markdown wiki pages. Its graph still lives in
+`wiki-graph/kg_store.json`. A follow-up will have it push entities/supply-chain via
+`PUT /api/wiki/pages/...` (it runs on Cloud Run, can't reach the VPS DB directly) and move
+`kg_store.json` into Postgres.
 
 ---
 

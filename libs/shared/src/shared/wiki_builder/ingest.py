@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from ..tickers import canonical_symbol, lookup_ticker
 from .factory import get_repository
 from .models import WikiPage
 from .records import (
@@ -23,6 +24,16 @@ from .records import (
 )
 from .repository import WikiRepository
 from .slugify import slugify, ticker_slug
+
+
+def _canonical_tickers(tickers: list[str]) -> list[str]:
+    """Canonicalize + de-duplicate a ticker list, preserving first-seen order."""
+    seen: dict[str, None] = {}
+    for t in tickers:
+        sym = canonical_symbol(t)
+        if sym:
+            seen.setdefault(sym, None)
+    return list(seen)
 
 
 def _append_line_to_section(body: str, marker: str, line: str) -> str:
@@ -91,6 +102,8 @@ def ingest_episode(
     if date is None:
         date = datetime.now().strftime("%Y-%m-%d")
 
+    tickers = _canonical_tickers(tickers)  # registry-canonical symbols (e.g. "2330.TW" -> "2330")
+
     episode_page = render_episode_page(
         podcast_name=podcast_name,
         episode_number=episode_number,
@@ -107,25 +120,28 @@ def ingest_episode(
     episode_page = repo.upsert_page(episode_page)
 
     recs = (ticker_recommendations or {}).get("ticker_recommendations", [])
-    recs_by_ticker = {str(r["ticker"]).upper(): r for r in recs if "ticker" in r}
+    recs_by_ticker = {canonical_symbol(r["ticker"]): r for r in recs if r.get("ticker")}
 
     for ticker in tickers:
         t_slug = ticker_slug(ticker)
         page = repo.get_page("entity", t_slug)
         if page is None:
+            info = lookup_ticker(ticker)
             page = render_entity_page(
                 entity_id=t_slug,
-                name=str(ticker).upper(),
-                entity_type="company",
-                tickers=[str(ticker).upper()],
+                name=info.name if info else ticker,
+                entity_type=info.type if info else "company",
+                tickers=[ticker],
                 mentions=[{"episode_link": ep_link, "context": title}],
                 ticker_history=[],
+                market=info.market if info else None,
+                sector=info.sector if info else None,
             )
         else:
             page.body = _append_line_to_section(
                 page.body, "## Episode Mentions", f"- [[{ep_link}]] — {title}"
             )
-        rec = recs_by_ticker.get(str(ticker).upper())
+        rec = recs_by_ticker.get(ticker)
         if rec:
             _append_ticker_history(
                 page,

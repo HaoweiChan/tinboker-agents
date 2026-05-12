@@ -97,7 +97,7 @@ and E (search) as a second pass since D touches the LLM pipeline.
 | Item | Status |
 |---|---|
 | Wiki → Postgres store + `/api/wiki` routes | Done (see [docs/wiki-schema.md](wiki-schema.md)) |
-| B — ticker registry | Not started |
+| B — ticker registry | Done — `libs/shared/src/shared/data/tickers.json` + `shared.tickers`; `ingest_episode` canonicalizes symbols and stamps entity pages with zh `name` / `market` / `sector` / `entity_type`. Follow-up: route the KG `seed_tickers_to_db` through the same registry; consider a `GET /api/wiki/tickers` registry dump. |
 | C — stats/aggregation router | Not started |
 | A — `/api/episodes` feed + detail | Not started |
 | D — pipeline emits bullets/chapters/clips | Not started |

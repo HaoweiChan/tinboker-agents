@@ -119,6 +119,30 @@ def test_ingest_episode_creates_entity_and_topic_pages():
     assert repo.get_page("entity", "aapl").body.count("[[episodes/") == 2
 
 
+def test_ingest_episode_uses_ticker_registry():
+    repo = InMemoryWikiRepository()
+    ingest_episode(
+        podcast_name="Gooaye", episode_number=571, title="EP571", date="2026-05-12",
+        tickers=["2330.TW", "NVDA", "SPY", "ZZZZ"], tags=["半導體"], summary_text="s",
+        repository=repo,
+    )
+    # aliases canonicalized; episode frontmatter uses canonical symbols
+    ep = repo.get_page("episode", "gooaye_ep571")
+    assert ep.frontmatter["tickers"] == ["2330", "NVDA", "SPY", "ZZZZ"]
+    # known tickers -> real name + market + sector + type
+    tsmc = repo.get_page("entity", "2330")
+    assert tsmc is not None and tsmc.title == "台積電"
+    assert tsmc.frontmatter["name"] == "台積電"
+    assert tsmc.frontmatter["market"] == "TW" and tsmc.frontmatter["sector"] == "半導體"
+    assert repo.get_page("entity", "spy").frontmatter["entity_type"] == "etf"
+    # unknown ticker -> falls back to the raw symbol, no market/sector
+    zzzz = repo.get_page("entity", "zzzz")
+    assert zzzz.frontmatter["name"] == "ZZZZ"
+    assert "market" not in zzzz.frontmatter and "sector" not in zzzz.frontmatter
+    # the alias did not create a separate "2330-tw" page
+    assert repo.get_page("entity", "2330-tw") is None
+
+
 def test_ingest_supply_chain():
     repo = InMemoryWikiRepository()
     n = ingest_supply_chain(

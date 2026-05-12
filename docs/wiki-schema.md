@@ -53,10 +53,17 @@ and rewrites the edge rows for that source page.
 
 | kind | typical `frontmatter` keys | `title` |
 |------|---------------------------|---------|
-| `episode` | `podcast`, `episode_number`, `date`, `tickers[]`, `tags[]`, `source_urls{mp3,transcript,summary}` | episode title |
-| `entity` | `id` (= slug), `name`, `entity_type` (`company`/`person`/`product`/`country`), `tickers[]` | entity name |
+| `episode` | `podcast`, `episode_number`, `date`, `tickers[]` (canonical symbols), `tags[]`, `source_urls{mp3,transcript,summary}` | episode title |
+| `entity` | `id` (= slug), `name`, `entity_type` (`company`/`etf`/`person`/`product`/`country`), `tickers[]`, `market` (`TW`/`US`/…, when known), `sector` (when known) | entity name |
 | `topic` | `id` (= slug), `name` | topic name |
 | `supply_chain` | `entity` (= slug of the source entity) | `"{name} — Supply Chain"` |
+
+**Ticker registry** — `ingest_episode` canonicalizes ticker symbols (e.g. `2330.TW` → `2330`) and,
+for tickers in [`libs/shared/src/shared/data/tickers.json`](../libs/shared/src/shared/data/tickers.json),
+sets the entity page's `name` (Traditional Chinese), `market`, `sector`, and `entity_type` from that
+registry; unknown tickers fall back to the raw symbol. Lookup helpers: `shared.tickers.lookup_ticker` /
+`canonical_symbol`. Extend `tickers.json` freely. (TODO: have `services/knowledge_graph` ticker
+seeding use the same registry.)
 
 Slugs: lowercase, hyphens for spaces (CJK preserved); ticker slugs lowercase with `.`→`-`;
 episode slug = `{slugified_podcast}_ep{number}` (or `{slugified_podcast}_{slugified_title[:60]}`).

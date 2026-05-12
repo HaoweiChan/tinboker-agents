@@ -81,6 +81,8 @@ def render_entity_page(
     ticker_history: list[dict[str, Any]] | None = None,
     supply_upstream: list[dict[str, str]] | None = None,
     supply_downstream: list[dict[str, str]] | None = None,
+    market: str | None = None,
+    sector: str | None = None,
 ) -> WikiPage:
     mentions = mentions or []
     ticker_history = ticker_history or []
@@ -91,6 +93,10 @@ def render_entity_page(
         "entity_type": entity_type,
         "tickers": [str(t) for t in tickers],
     }
+    if market:
+        frontmatter["market"] = market
+    if sector:
+        frontmatter["sector"] = sector
 
     lines: list[str] = [f"# {name}", ""]
     if mentions:

@@ -31,6 +31,9 @@ _GSM_OPTIONAL: tuple[str, ...] = (
     # Postgres connection string for the knowledge wiki (lives on the VPS).
     # Optional: if absent, wiki ingest is a no-op (best-effort step).
     "WIKI_DATABASE_URL",
+    # Postgres connection string for the episode catalog mirror (podcast_db on the VPS).
+    # Optional: if absent, the Postgres-episode step is a no-op (best-effort).
+    "EPISODE_DATABASE_URL",
 )
 
 _YAML_PATH = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"

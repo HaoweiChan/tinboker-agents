@@ -41,6 +41,12 @@ jobs:
           GOOGLE_API_KEY: ci-dummy
           FIRESTORE_DATABASE_ID: ci-dummy
           GCP_CREDENTIALS_JSON: "{}"
+          SPOTIFY_ID: ci-dummy
+          SPOTIFY_SECRET: ci-dummy
+          LANGSMITH_API_KEY: ci-dummy
+          WIKI_DATABASE_URL: postgresql://ci-dummy/dummy
+          EPISODE_DATABASE_URL: postgresql://ci-dummy/dummy
+          OPENROUTER_API_KEY: ci-dummy
         run: |
           uv run pytest \
             services/podcast/tests/unit \

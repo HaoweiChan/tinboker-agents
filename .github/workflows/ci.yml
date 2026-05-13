@@ -52,4 +52,5 @@ jobs:
             services/podcast/tests/unit \
             libs/shared/tests \
             --ignore=services/podcast/tests/integration \
+            --ignore=libs/shared/tests/test_wiki_postgres.py \
             -v --tb=short

@@ -45,6 +45,15 @@ _TEMPERATURE_MAP: dict[str, float] = {
     "ticker_extractor": 0.1,
 }
 
+# Max output tokens for OpenRouter models (Gemini handles this via its own defaults).
+# Writer/marp roles need headroom for long Chinese prose; extraction roles don't.
+_MAX_TOKENS_MAP: dict[str, int] = {
+    "extractor": 2048,
+    "writer": 8192,
+    "marp_writer": 8192,
+    "ticker_extractor": 2048,
+}
+
 
 @lru_cache(maxsize=8)
 def load_prompt(name: str) -> dict[str, str]:
@@ -77,10 +86,10 @@ def get_model(role: str):
         return ChatOpenAI(
             model=model[len(_OPENROUTER_PREFIX):],
             temperature=temperature,
+            max_tokens=_MAX_TOKENS_MAP.get(role, 4096),
             base_url=_OPENROUTER_BASE_URL,
             api_key=os.getenv("OPENROUTER_API_KEY"),
             default_headers={
-                # Optional — shows up in OpenRouter's dashboard / app rankings.
                 "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "https://tinboker.com"),
                 "X-Title": "TinBoker content pipeline",
             },

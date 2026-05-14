@@ -5,12 +5,14 @@ store on the Netcup VPS**, cutting GCP to near-zero. The webui is **not yet
 published**, so this is the cheapest possible moment to do this — there are no
 real users to break, no SLA, no dual-write phase needed.
 
-**Status (2026-05-14):** in progress.
+**Status (2026-05-15):** in progress.
 - ✅ graph-agent teardown (2026-05-13)
 - ✅ Firestore → Postgres mirror (`podcast_db.firestore_mirror`, 2026-05-13)
 - ✅ New Firestore exporters (`ticker_insights/`, `trending_tickers/`) shipped 2026-05-14 — pre-migration data shape correct; Postgres versions to be added in Phase D
 - ✅ Cross-team data contract published to `contract/firestore-schema` on the wiki Postgres 2026-05-14 — will be deprecated by `contract/data-api` once HTTP API lands
-- ⏳ Phases A–F below — **not started**
+- ✅ Phase A complete (2026-05-15): 20-show `podcasts_to_download.json`, legacy cron disabled, new nightly cron live. Fixed `[Errno 28] ENOSPC` bug — temp MP3s now cleaned up via `finally` block in `processor.py` after each episode; without this fix /tmp (3.9 GB tmpfs) filled up across 20-show runs. VPS validation gate pending one successful nightly run.
+- ✅ Phase B complete (2026-05-15): `libs/shared/src/shared/db/` module added — 5 tables (`podcasts`, `episodes`, `tickers`, `ticker_insights`, `trending_tickers`), ABC+InMemory+Null+Postgres repositories, 20 unit tests. Migration applied to VPS `tinboker_wiki` DB; `list_recent(limit=5)` returns `[]`. No users table (platform repo owns users — Q4). Q5 NOTE: the 8 "bare slugs" (009150, 3548, 6324, 8035, elon, kem, openai, spcx) have 89 wiki_links referencing them — they are real entities, NOT noise. They need tickers.json enrichment, not deletion.
+- ⏳ Phases C–F below — **not started**
 
 **Owner for the next session:** read this doc top to bottom, then start at the
 first incomplete phase. CLAUDE.md and `docs/spec-from-platform.md` are

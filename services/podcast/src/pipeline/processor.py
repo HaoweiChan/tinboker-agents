@@ -16,7 +16,9 @@ from .steps import (
     ingest_into_wiki,
     initialize_stt_service,
     mirror_episode_to_postgres,
+    render_social_cards,
     transcribe_episode,
+    trigger_social_publish,
     upload_to_firestore,
     upload_to_gcs,
     validate_episode,
@@ -126,6 +128,10 @@ class EpisodeProcessor:
             # Step 4: Upload to GCS
             upload_to_gcs(self.config, self.services, episode_data)
 
+            # Step 4b: Render + upload social cards (best-effort); enriches social_cards
+            # with image_urls before they're persisted to Firestore below.
+            render_social_cards(self.config, self.services, episode_data)
+
             # Step 5: Upload to Firestore
             upload_to_firestore(self.config, self.services, episode_data)
 
@@ -137,6 +143,9 @@ class EpisodeProcessor:
 
             # Step 5d: Export ticker insights to Firestore subcollection per platform contract
             export_ticker_insights(self.config, self.services, episode_data)
+
+            # Step 5e: Trigger the platform to fan the new episode out to Threads (best-effort)
+            trigger_social_publish(self.config, self.services, episode_data)
 
             # Step 6: Validate
             validate_episode(self.config, self.services, episode_data)
